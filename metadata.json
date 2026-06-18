@@ -1,0 +1,6 @@
+{
+  "name": "JO STUDIO",
+  "description": "Generator video bertenaga AI untuk mengubah teks atau gambar menjadi video berkualitas tinggi (Pixar, Disney, Realistis) dengan rasio landscape/portrait dan durasi yang dapat disesuaikan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
