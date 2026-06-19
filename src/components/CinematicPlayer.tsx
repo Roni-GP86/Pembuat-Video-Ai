@@ -6,6 +6,7 @@ export interface StoryboardScene {
   title: string;
   enhancedPrompt: string;
   imageUrl?: string;
+  indonesianNarration?: string;
 }
 
 interface CinematicPlayerProps {
@@ -15,6 +16,7 @@ interface CinematicPlayerProps {
   aspectRatio: string; // "16:9" | "9:16"
   prompt: string;
   scenes?: StoryboardScene[]; // Optional list of consecutive scenes for full storytelling!
+  narrationText?: string; // Optional narration/dialogue text for TTS and subtitle overlay
 }
 
 export default function CinematicPlayer({
@@ -24,6 +26,7 @@ export default function CinematicPlayer({
   aspectRatio,
   prompt,
   scenes,
+  narrationText,
 }: CinematicPlayerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -40,6 +43,37 @@ export default function CinematicPlayer({
   const volumeNodeRef = useRef<GainNode | null>(null);
   const oscillatorNodeRef = useRef<OscillatorNode | null>(null);
   const filterNodeRef = useRef<BiquadFilterNode | null>(null);
+
+  // Narration / TTS refs
+  const narrationRef = useRef<string>(narrationText || "");
+  const narrationChunksRef = useRef<string[]>([]);
+  useEffect(() => { narrationRef.current = narrationText || ""; }, [narrationText]);
+
+  // Split narration into sentence-chunks for subtitle display
+  useEffect(() => {
+    if (!narrationText) { narrationChunksRef.current = []; return; }
+    const sentences = narrationText.match(/[^.!?\n]+[.!?\n]*/g) || [narrationText];
+    narrationChunksRef.current = sentences.map(s => s.trim()).filter(Boolean);
+  }, [narrationText]);
+
+  // Web Speech API — speak narration when playing
+  const speakNarration = (text: string) => {
+    if (!text || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "id-ID";
+    utter.rate = 0.88;
+    utter.pitch = 1.05;
+    // Prefer Indonesian voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const idVoice = voices.find(v => v.lang.startsWith("id")) || voices.find(v => v.lang.startsWith("en"));
+    if (idVoice) utter.voice = idVoice;
+    window.speechSynthesis.speak(utter);
+  };
+
+  const stopNarration = () => {
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+  };
 
   // Reset scene index when list of scenes changes
   useEffect(() => {
@@ -130,15 +164,25 @@ export default function CinematicPlayer({
     }
   }, [isMuted]);
 
-  // Audio start trigger on playing
+  // Audio + Narration start/stop on play state change
   useEffect(() => {
     if (isPlaying) {
       startAtmosphericSound();
+      if (narrationRef.current) speakNarration(narrationRef.current);
     } else {
       stopAtmosphericSound();
+      stopNarration();
     }
-    return () => stopAtmosphericSound();
+    return () => { stopAtmosphericSound(); stopNarration(); };
   }, [isPlaying, style]);
+
+  // Re-speak when scene changes
+  useEffect(() => {
+    if (isPlaying && scenes) {
+      const sceneNarration = scenes[currentSceneIdx]?.enhancedPrompt || narrationRef.current;
+      if (sceneNarration) speakNarration(sceneNarration);
+    }
+  }, [currentSceneIdx]);
 
   // Image preloading
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -188,10 +232,12 @@ export default function CinematicPlayer({
   const isPlayingRef = useRef(isPlaying);
   const styleRef = useRef(style);
   const durationRef = useRef(duration);
+  const currentSceneIdxRef = useRef(currentSceneIdx);
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { styleRef.current = style; }, [style]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
+  useEffect(() => { currentSceneIdxRef.current = currentSceneIdx; }, [currentSceneIdx]);
 
   // Render Loop & Particle FX — mounted ONCE per image load, uses refs for live data
   useEffect(() => {
@@ -367,6 +413,107 @@ export default function CinematicPlayer({
         ctx.fillStyle = fg;
         ctx.fillRect(0, 0, cw, ch);
         ctx.restore();
+      }
+
+      // 5. TITLE CARD — tampil di 2.5 detik pertama setiap adegan
+      const TITLE_SHOW = 2.5;
+      if (ct < TITLE_SHOW) {
+        // Fade: masuk 0-0.4s, tetap, keluar 2.0-2.5s
+        let titleAlpha = 1.0;
+        if (ct < 0.4) titleAlpha = ct / 0.4;
+        else if (ct > 2.0) titleAlpha = 1.0 - (ct - 2.0) / 0.5;
+        titleAlpha = Math.max(0, Math.min(1, titleAlpha));
+
+        ctx.save();
+        ctx.globalAlpha = titleAlpha;
+
+        // Latar gelap gradien bawah
+        const tg = ctx.createLinearGradient(0, ch * 0.45, 0, ch * 0.82);
+        tg.addColorStop(0, "rgba(0,0,0,0)");
+        tg.addColorStop(1, "rgba(0,0,0,0.88)");
+        ctx.fillStyle = tg;
+        ctx.fillRect(0, ch * 0.45, cw, ch * 0.55);
+
+        // Garis aksen emas horizontal
+        ctx.strokeStyle = st === "Cyberpunk" ? "rgba(0,240,255,0.85)" : "rgba(255,210,80,0.85)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cw * 0.08, ch * 0.62);
+        ctx.lineTo(cw * 0.92, ch * 0.62);
+        ctx.stroke();
+
+        // Nomor episode kecil
+        const epNum = scenes ? `EPISODE ${(scenes.indexOf(scenes[currentSceneIdxRef.current]) + 1) || 1} / ${scenes.length}` : "ADEGAN";
+        ctx.font = `600 ${Math.max(9, cw / 60)}px system-ui, Arial`;
+        ctx.fillStyle = st === "Cyberpunk" ? "rgba(0,240,255,0.9)" : "rgba(255,210,80,0.9)";
+        ctx.textAlign = "center";
+        ctx.fillText(epNum, cw / 2, ch * 0.66);
+
+        // Judul adegan — bungkus jika terlalu panjang
+        const titleText = (scenes ? scenes[currentSceneIdxRef.current]?.title : "") || activeTitle;
+        ctx.font = `bold ${Math.max(14, Math.min(26, cw / 22))}px system-ui, Arial`;
+        ctx.fillStyle = "rgba(255,255,255,0.97)";
+        // word-wrap
+        const titleWords = titleText.split(" ");
+        const tLines: string[] = [];
+        let tLine = "";
+        for (const w of titleWords) {
+          const test = tLine ? tLine + " " + w : w;
+          if (ctx.measureText(test).width > cw * 0.80) { if (tLine) tLines.push(tLine); tLine = w; }
+          else tLine = test;
+        }
+        if (tLine) tLines.push(tLine);
+        const tLineH = Math.max(18, Math.min(32, cw / 20));
+        tLines.forEach((l, i) => ctx.fillText(l, cw / 2, ch * 0.72 + i * tLineH));
+
+        ctx.restore();
+      }
+
+      // 6. Subtitle / Narration overlay
+      const chunks = narrationChunksRef.current;
+      if (chunks.length > 0) {
+        const chunkIdx = Math.min(Math.floor((ct / dur) * chunks.length), chunks.length - 1);
+        const subtitleText = chunks[chunkIdx] || "";
+        if (subtitleText) {
+          ctx.save();
+          const fontSize = Math.max(12, Math.min(16, cw / 35));
+          ctx.font = `bold ${fontSize}px system-ui, Arial, sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "bottom";
+
+          // Word-wrap to max 50 chars per line
+          const words = subtitleText.split(" ");
+          const lines: string[] = [];
+          let line = "";
+          for (const word of words) {
+            const test = line ? line + " " + word : word;
+            if (ctx.measureText(test).width > cw * 0.88) {
+              if (line) lines.push(line);
+              line = word;
+            } else {
+              line = test;
+            }
+          }
+          if (line) lines.push(line);
+
+          const lineH = fontSize + 4;
+          const boxH = lines.length * lineH + 12;
+          const boxY = ch - 56;
+
+          // Semi-transparent background
+          ctx.fillStyle = "rgba(0,0,0,0.72)";
+          const boxW = Math.min(cw * 0.92, 600);
+          ctx.beginPath();
+          ctx.roundRect(cw / 2 - boxW / 2, boxY - boxH, boxW, boxH, 6);
+          ctx.fill();
+
+          // Subtitle text
+          ctx.fillStyle = "rgba(255,255,230,0.97)";
+          lines.forEach((l, i) => {
+            ctx.fillText(l, cw / 2, boxY - boxH + lineH * (i + 1) + 4);
+          });
+          ctx.restore();
+        }
       }
 
       animFrame = requestAnimationFrame(render);
